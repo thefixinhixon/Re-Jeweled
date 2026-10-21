@@ -1,0 +1,11 @@
+<RCC>
+    <!-- Art + theme, embedded so the binary is self-contained.
+         Bejeweled Blitz Live ("Re-Jeweled Launcher") resources. -->
+    <qresource prefix="/assets">
+        <file alias="banner.png">assets-bejeweled/banner.png</file>
+        <file alias="icon.png">assets-bejeweled/icon.png</file>
+    </qresource>
+    <qresource prefix="/theme">
+        <file alias="bejeweled.qss">theme/bejeweled.qss</file>
+    </qresource>
+</RCC>

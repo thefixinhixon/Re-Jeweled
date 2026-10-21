@@ -1,0 +1,13 @@
+[project]
+name = "bejeweled"
+sdk_version = "0.10.0"
+game_root = "assets"
+
+[entrypoint]
+setjmp_address = 0x82C26B40
+longjmp_address = 0x823E0500
+file_path = "assets/default.xex"
+out_directory_path = "generated/default"
+includes = [
+	"bejeweled_config.toml",
+]

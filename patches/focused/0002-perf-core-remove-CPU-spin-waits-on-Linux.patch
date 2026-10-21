@@ -1,0 +1,233 @@
+From 24333464a1f7242e1c14fe6abcfc38ad5b52f86f Mon Sep 17 00:00:00 2001
+From: thefixinhixon <hbomb187@gmail.com>
+Date: Mon, 12 Oct 2026 16:23:35 -0600
+Subject: [PATCH] perf(core): remove CPU spin-waits on Linux
+
+- memory_posix: FindEntryForAddress/IsRangeFullyMapped use the
+  PROCMAP_QUERY ioctl instead of re-parsing /proc/self/maps, with the
+  text parse kept as a fallback for older kernels.
+- timer_queue: blocking wait strategy instead of spinning.
+- disruptorplus blocking_wait_strategy: fix swapped wait_for/wait_until
+  arguments (did not compile once instantiated).
+- threading_posix WaitMultiple: sleep the remaining time in
+  microseconds (capped at 1 ms); millisecond truncation made it spin.
+
+Lollipop Chainsaw school area: ~200-250% -> ~130-160% process CPU at
+the same ~57 fps.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/core/memory_posix.cpp                     | 79 +++++++++++++++++++
+ src/core/threading_posix.cpp                  |  9 ++-
+ src/core/timer_queue.cpp                      | 13 ++-
+ .../disruptorplus/blocking_wait_strategy.hpp  | 12 ++-
+ 4 files changed, 103 insertions(+), 10 deletions(-)
+
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..d32c69a 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay & Rien Gupta, 2026 - Adapted for ReXGlue runtime (POSIX + macOS)
+  */
+ 
++#include <atomic>
+ #include <cerrno>
+ #include <cstddef>
+ #include <cstdio>
+@@ -18,6 +19,10 @@
+ #include <string>
+ 
+ #include <fcntl.h>
++#if defined(__linux__)
++#include <linux/fs.h>
++#include <sys/ioctl.h>
++#endif
+ 
+ #if REX_PLATFORM_MAC
+ #include <mach/mach.h>
+@@ -170,9 +175,65 @@ static bool ParseProcMapsLine(const std::string& line, LinuxMapEntry& out) {
+   return out.start < out.end;
+ }
+ 
++#ifdef PROCMAP_QUERY
++// PROCMAP_QUERY (Linux 6.11+) returns the VMA covering an address with one
++// ioctl instead of reading and parsing /proc/self/maps as text. That matters
++// because QueryProtect runs in the MMIO / write-watch fault handler on game
++// threads (profiled: up to a third of the main game thread's time went to maps
++// parsing), and the ioctl, unlike std::ifstream, is async-signal-safe.
++// Result: 1 = found, 0 = not mapped, -1 = unsupported (use the text parser).
++static std::atomic<int> g_procmap_fd{-1};
++static std::atomic<bool> g_procmap_unsupported{false};
++
++static int ProcMapQuery(uintptr_t addr, LinuxMapEntry& out) {
++  if (g_procmap_unsupported.load(std::memory_order_relaxed)) {
++    return -1;
++  }
++  int fd = g_procmap_fd.load(std::memory_order_acquire);
++  if (fd < 0) {
++    const int new_fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
++    if (new_fd < 0) {
++      return -1;
++    }
++    int expected = -1;
++    if (g_procmap_fd.compare_exchange_strong(expected, new_fd, std::memory_order_acq_rel)) {
++      fd = new_fd;
++    } else {
++      close(new_fd);
++      fd = expected;
++    }
++  }
++  procmap_query q = {};
++  q.size = sizeof(q);
++  q.query_flags = 0;  // Only the VMA covering query_addr.
++  q.query_addr = addr;
++  if (ioctl(fd, PROCMAP_QUERY, &q) != 0) {
++    if (errno == ENOENT) {
++      return 0;
++    }
++    g_procmap_unsupported.store(true, std::memory_order_relaxed);
++    return -1;
++  }
++  out = LinuxMapEntry{};
++  out.start = static_cast<uintptr_t>(q.vma_start);
++  out.end = static_cast<uintptr_t>(q.vma_end);
++  out.perms[0] = (q.vma_flags & PROCMAP_QUERY_VMA_READABLE) ? 'r' : '-';
++  out.perms[1] = (q.vma_flags & PROCMAP_QUERY_VMA_WRITABLE) ? 'w' : '-';
++  out.perms[2] = (q.vma_flags & PROCMAP_QUERY_VMA_EXECUTABLE) ? 'x' : '-';
++  out.perms[3] = (q.vma_flags & PROCMAP_QUERY_VMA_SHARED) ? 's' : 'p';
++  return 1;
++}
++#endif  // PROCMAP_QUERY
++
+ // Find the mapping entry in /proc/self/maps that contains the given address
+ static bool FindEntryForAddress(void* address, LinuxMapEntry& out_entry) {
+   const uintptr_t addr = reinterpret_cast<uintptr_t>(address);
++#ifdef PROCMAP_QUERY
++  const int query_result = ProcMapQuery(addr, out_entry);
++  if (query_result >= 0) {
++    return query_result == 1;
++  }
++#endif
+   std::ifstream maps("/proc/self/maps");
+   if (!maps.is_open())
+     return false;
+@@ -200,6 +261,24 @@ static bool IsRangeFullyMapped(void* base_address, size_t length) {
+     return false;
+   }
+ 
++#ifdef PROCMAP_QUERY
++  {
++    uintptr_t query_cursor = begin;
++    int query_result = 1;
++    while (query_cursor < end) {
++      LinuxMapEntry e;
++      query_result = ProcMapQuery(query_cursor, e);
++      if (query_result != 1) {
++        break;
++      }
++      query_cursor = e.end;
++    }
++    if (query_result >= 0) {
++      return query_result == 1;  // 0: gap found.
++    }
++  }
++#endif
++
+   std::ifstream maps("/proc/self/maps");
+   if (!maps.is_open())
+     return false;
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+index 9ac8d15..b5cb98a 100644
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -414,8 +414,13 @@ class PosixConditionBase {
+       if (timeout == std::chrono::milliseconds::max()) {
+         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+       } else {
+-        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+-        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
++        // Sleep for the real remaining time (capped at 1 ms). Truncating it to
++        // whole milliseconds made the final sub-millisecond stretch a hot spin
++        // (sleep_for(0), then lock all handles again): measured ~16 million
++        // trylocks/s and 30-65% of a CPU on the Audio Worker.
++        auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(end_time - now);
++        auto sleep_time =
++            std::min(remaining, std::chrono::microseconds(std::chrono::milliseconds(1)));
+         std::this_thread::sleep_for(sleep_time);
+       }
+     }
+diff --git a/src/core/timer_queue.cpp b/src/core/timer_queue.cpp
+index 5cfea05..ce0af9f 100644
+--- a/src/core/timer_queue.cpp
++++ b/src/core/timer_queue.cpp
+@@ -15,7 +15,7 @@
+ #include <disruptorplus/multi_threaded_claim_strategy.hpp>
+ #include <disruptorplus/ring_buffer.hpp>
+ #include <disruptorplus/sequence_barrier.hpp>
+-#include <disruptorplus/spin_wait_strategy.hpp>
++#include <disruptorplus/blocking_wait_strategy.hpp>
+ 
+ #include <rex/assert.h>
+ #include <rex/thread.h>
+@@ -142,9 +142,14 @@ class TimerQueue {
+   // This ring buffer will be used to introduce timers queued by the public API
+   static constexpr size_t kWaitCount = 512;
+   dp::ring_buffer<std::shared_ptr<WaitItem>> buffer_;
+-  dp::spin_wait_strategy wait_strategy_;
+-  dp::multi_threaded_claim_strategy<dp::spin_wait_strategy> claim_strategy_;
+-  dp::sequence_barrier<dp::spin_wait_strategy> consumed_;
++  // Blocking (condition variable) rather than spin: the dispatch thread waits
++  // for the next due time or a newly queued timer. The spin strategy yielded
++  // ~10,000 times/s on an idle queue (~20% of a CPU, stealing from the game
++  // thread's hyper-thread sibling) and called hardware_concurrency(), which
++  // re-reads /sys/devices/system/cpu/online, on every wait.
++  dp::blocking_wait_strategy wait_strategy_;
++  dp::multi_threaded_claim_strategy<dp::blocking_wait_strategy> claim_strategy_;
++  dp::sequence_barrier<dp::blocking_wait_strategy> consumed_;
+ 
+   // This is a _sorted_ (ascending due_) list of active timers managed by a
+   // dedicated thread
+diff --git a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp b/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
+index 32d427d..1cb1dfe 100644
+--- a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
++++ b/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
+@@ -116,13 +116,15 @@ namespace disruptorplus
+             sequence_t result;
+             {
+                 std::unique_lock<std::mutex> lock(m_mutex);
++                // (lock, time, predicate): the upstream header had the
++                // predicate and time swapped, which does not compile.
+                 m_cv.wait_for(
+                     lock,
++                    timeout,
+                     [&]() -> bool {
+                         result = minimum_sequence_after(sequence, count, sequences);
+                         return difference(result, sequence) >= 0;
+-                    },
+-                    timeout);
++                    });
+             }
+             return result;
+         }
+@@ -169,13 +171,15 @@ namespace disruptorplus
+             sequence_t result;
+             {
+                 std::unique_lock<std::mutex> lock(m_mutex);
++                // (lock, time, predicate): the upstream header had the
++                // predicate and time swapped, which does not compile.
+                 m_cv.wait_until(
+                     lock,
++                    timeoutTime,
+                     [&]() -> bool {
+                         result = minimum_sequence_after(sequence, count, sequences);
+                         return difference(result, sequence) >= 0;
+-                    },
+-                    timeoutTime);
++                    });
+             }
+             return result;
+         }
+-- 
+2.53.0
+

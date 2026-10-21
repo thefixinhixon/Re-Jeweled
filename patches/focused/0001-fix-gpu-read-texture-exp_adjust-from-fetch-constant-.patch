@@ -1,0 +1,74 @@
+From 7efddc0b375f110e6ce9968bcf7147e851566cb7 Mon Sep 17 00:00:00 2001
+From: thefixinhixon <hbomb187@gmail.com>
+Date: Mon, 12 Oct 2026 16:23:35 -0600
+Subject: [PATCH] fix(gpu): read texture exp_adjust from fetch constant word 3
+
+The SPIR-V translator extracted the result exponent bias from word 4
+bits 13:18, which overlap the LOD bias field. Any texture with a
+non-zero LOD bias had its samples scaled by 2^(bias bits), blowing out
+materials during UE3 streaming fades (Lollipop Chainsaw "wash").
+Upstream Xenia reads exp_adjust from word 3.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../shader/spirv_translator_fetch.cpp         | 28 ++++++++++++++++---
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+index 9ce3bb4..34e6a59 100644
+--- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+@@ -1409,8 +1409,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+             builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, is_all_signed);
+ 
+         // Load the fetch constant word 4, needed unconditionally for LOD
+-        // biasing, for result exponent biasing, and conditionally for stacked
+-        // texture filtering.
++        // biasing, and conditionally for stacked texture filtering.
+         id_vector_temp_.clear();
+         id_vector_temp_.push_back(const_int_0_);
+         id_vector_temp_.push_back(
+@@ -1424,6 +1423,27 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         spv::Id fetch_constant_word_4_signed =
+             builder_->createUnaryOp(spv::OpBitcast, type_int_, fetch_constant_word_4);
+ 
++        // LC-PATCH (house): load the fetch constant word 3, which holds the
++        // result exponent adjustment (exp_adjust, bits 13:18). The stock code
++        // extracted the exponent bias from word 4 bits 13:18 instead - those
++        // bits overlap the LOD bias field (word 4 bits 12:21), so any texture
++        // with a non-zero LOD bias had its sampled values scaled by
++        // 2^(lod-bias bits) (e.g. LOD bias +0.5 -> x2^8), blowing out
++        // materials while UE3 animated LOD bias during texture streaming
++        // fades. Upstream Xenia reads exp_adjust from word 3.
++        id_vector_temp_.clear();
++        id_vector_temp_.push_back(const_int_0_);
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) >> 2)));
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) & 3)));
++        spv::Id fetch_constant_word_3 = builder_->createLoad(
++            builder_->createAccessChain(spv::StorageClassUniform, uniform_fetch_constants_,
++                                        id_vector_temp_),
++            spv::NoPrecision);
++        spv::Id fetch_constant_word_3_signed =
++            builder_->createUnaryOp(spv::OpBitcast, type_int_, fetch_constant_word_3);
++
+         // Accumulate the explicit LOD (or LOD bias) sources (in D3D11.3
+         // specification order: specified LOD + sampler LOD bias + instruction
+         // LOD bias).
+@@ -2030,10 +2050,10 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         }
+ 
+         // Apply the exponent bias from the bits 13:18 of the fetch constant
+-        // word 4.
++        // word 3. (LC-PATCH: was word 4 - see the word 3 load above.)
+         spv::Id result_exponent_bias = builder_->createBinBuiltinCall(
+             type_float_, ext_inst_glsl_std_450_, GLSLstd450Ldexp, const_float_1_,
+-            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_4_signed,
++            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_3_signed,
+                                   builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
+         {
+           uint32_t result_remaining_components = used_result_nonzero_components;
+-- 
+2.53.0
+
