@@ -17,7 +17,7 @@ This project's own code is BSD 3-Clause (see `LICENSE`).
 - **Re-Jeweled** — the ReXGlue recompilation of Bejeweled Blitz Live:
   codegen configuration, file-layer fixes and the XCTD content decoder
   by **Moosh**; graphics fix (texture exponent bias), CPU spin-wait fixes
-  and packaging by **Jason Hixon** and the house team.
+  and packaging by **thefixinhixon** and the house team.
 - **ReXGlue SDK** — static recompilation runtime and codegen
   (BSD 3-Clause; `licenses/ReXGlue-SDK-BSD-3-Clause.txt`), with
   house patches.
