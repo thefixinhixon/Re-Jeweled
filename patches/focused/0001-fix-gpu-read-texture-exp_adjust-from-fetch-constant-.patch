@@ -1,5 +1,5 @@
 From 7efddc0b375f110e6ce9968bcf7147e851566cb7 Mon Sep 17 00:00:00 2001
-From: thefixinhixon <hbomb187@gmail.com>
+From: thefixinhixon <thefixinhixon@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 16:23:35 -0600
 Subject: [PATCH] fix(gpu): read texture exp_adjust from fetch constant word 3
 
