@@ -1,5 +1,5 @@
 From 24333464a1f7242e1c14fe6abcfc38ad5b52f86f Mon Sep 17 00:00:00 2001
-From: thefixinhixon <hbomb187@gmail.com>
+From: thefixinhixon <thefixinhixon@users.noreply.github.com>
 Date: Mon, 12 Oct 2026 16:23:35 -0600
 Subject: [PATCH] perf(core): remove CPU spin-waits on Linux
 
