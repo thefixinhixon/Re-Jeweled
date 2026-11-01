@@ -74,6 +74,12 @@ Write-Host "windeployqt: $windeployqtExe"
     --no-system-d3d-compiler --dir $out (Join-Path $out 'ReJeweledLauncher.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed (exit $LASTEXITCODE)" }
 
+# --compiler-runtime also copies Microsoft's vc_redist.x64.exe installer
+# (about 19 MB) into the folder on some Qt kits. The CRT DLLs are deployed
+# beside the exe, so the installer is dead weight in a folder package that is
+# unzipped rather than installed - drop it.
+Get-ChildItem $out -Filter 'vc_redist*.exe' | Remove-Item -Force
+
 # --compiler-runtime does not reliably find the VC redist on the CI image
 # (windows-latest with VS 18 left vcruntime140/msvcp140 out), so place the CRT
 # DLLs here from the redist folder the MSVC environment points at. Conditional,
