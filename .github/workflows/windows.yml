@@ -195,8 +195,8 @@ jobs:
           cmake --preset win-amd64-release
           -DREXSDK_DIR="$env:GITHUB_WORKSPACE/rexglue-sdk"
           -DREXGLUE_ENABLE_FIDELITYFX=ON
-          -DCMAKE_C_FLAGS=$env:ARCH_FLAGS
-          -DCMAKE_CXX_FLAGS=$env:ARCH_FLAGS
+          "-DCMAKE_C_FLAGS=$env:ARCH_FLAGS"
+          "-DCMAKE_CXX_FLAGS=$env:ARCH_FLAGS"
 
       - name: Build game
         shell: pwsh
