@@ -12,6 +12,21 @@
 #include <QString>
 #include <QStringList>
 #include <QVector>
+#include <QtGlobal>
+
+// Audio environment for the game process on Linux: SDL's native PipeWire
+// backend can record silence on 6-channel streams, while PipeWire's
+// PulseAudio layer plays correctly (2026-10-11). Windows needs no override -
+// SDL picks WASAPI there, and naming a driver that does not exist breaks
+// audio init, so the list is empty there.
+inline QStringList linuxPulseAudioEnv()
+{
+#if defined(Q_OS_WIN)
+    return {};
+#else
+    return {QStringLiteral("SDL_AUDIO_DRIVER=pulseaudio")};
+#endif
+}
 
 struct GameProfile {
     QString name;         // Display name, e.g. "The Maw"
@@ -147,12 +162,7 @@ inline const GameProfile &lollipopProfile()
         QStringLiteral("#ff4fa3"), // hot pink (drives the .qss)
         QStringLiteral("Re-Cherry Launcher"),
         QStringLiteral(":/theme/lollipop.qss"),
-        {
-            // Audio fix (2026-10-11): with SDL's native PipeWire
-            // backend the game's 6-channel stream records silence;
-            // PipeWire's PulseAudio layer plays correctly.
-            QStringLiteral("SDL_AUDIO_DRIVER=pulseaudio"),
-        },
+        linuxPulseAudioEnv(),
     };
     return profile;
 }
@@ -178,12 +188,10 @@ inline const GameProfile &bejeweledProfile()
         QStringLiteral("#2f8cff"), // gem blue (drives the .qss)
         QStringLiteral("Re-Jeweled Launcher"),
         QStringLiteral(":/theme/bejeweled.qss"),
-        {
-            // Same runtime audio path as Lollipop Chainsaw: SDL's
-            // native PipeWire backend can record silence on 6-channel
-            // streams; PipeWire's PulseAudio layer plays correctly.
-            QStringLiteral("SDL_AUDIO_DRIVER=pulseaudio"),
-        },
+        // Same runtime audio path as Lollipop Chainsaw: SDL's native
+        // PipeWire backend can record silence on 6-channel streams;
+        // PipeWire's PulseAudio layer plays correctly.
+        linuxPulseAudioEnv(),
     };
     return profile;
 }

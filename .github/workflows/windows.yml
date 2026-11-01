@@ -1,0 +1,274 @@
+# =============================================================================
+# Windows build - Windows 10/11 x64 package
+#
+# Produces a folder ZIP holding the whole runnable set:
+#   ReJeweledLauncher.exe  (Qt 6 launcher, windeployqt'd)
+#   bejeweled.exe          (recompiled game)
+#   rexruntime.dll         (matched runtime)
+#   rexgpu-xenos.dll       (matched GPU plugin - Windows builds it for D3D12)
+#   amd_fidelityfx_dx12.dll (FSR; present when REXGLUE_ENABLE_FIDELITYFX=ON)
+#   xctd.exe               (XCTD decoder the import step runs)
+#   licenses/, xctd-src/, README.txt
+#
+# NO GAME DATA is bundled or committed. The user imports their own copy of
+# Bejeweled Blitz Live (title 58410A57) on first run, exactly as on Linux.
+#
+# The game exe is compiled from the recompiled sources in generated/, which
+# this repo does not commit (they are derived from the game's default.xex and
+# .gitignore keeps them out - see README.md). The "Recompiled sources" steps
+# accept any of:
+#   1. a generated/ tree in the checkout       (git add -f generated),
+#   2. the Actions cache from an earlier run   (restored below), or
+#   3. assets/default.xex in the checkout      (codegen runs here, then cached).
+# With none of the three the job stops with an explanation instead of a
+# confusing CMake error.
+#
+# Recipe notes (all learned building this SDK on Windows):
+#   * The SDK is pinned; the house patch is LF-only, so the clone runs with
+#     autocrlf off (actions/checkout would give CRLF and every hunk fails).
+#   * The two D3D12 presenter files are excluded from the patch: the house
+#     patch's guest-output-shared-texture feature is half-ported (its base
+#     class half is not in this SDK tree). Invisible on Linux, where D3D12
+#     never compiles; it breaks the Windows build, so Windows uses the
+#     pristine upstream presenter.
+#   * The Windows presets compile with clang/clang++ + Ninja, not MSVC:
+#     the SDK passes GCC-style flags. msvc-dev-cmd supplies INCLUDE/LIB.
+#   * FidelityFX is forced ON. With it off, --present_effect=fsr silently
+#     falls back to bilinear (bit the Linux builds twice).
+#   * fetch-tags: false - the SDK's version check fails when the game repo
+#     carries a release tag that reads "ahead" of the SDK floor.
+# =============================================================================
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'appimage/**'
+      - 'release/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'appimage/**'
+      - 'release/**'
+
+permissions:
+  contents: read
+
+# One build per ref: a new push supersedes the run still compiling.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exact SDK commit the house patch was generated from. Do not float.
+  REXSDK_COMMIT: f5337cdc947ff6d4c4196737e2c807a48f2a1fc2
+  # x86-64-v2 keeps the binary friendly to older CPUs; the recomp needs SSE4.1.
+  ARCH_FLAGS: -march=x86-64-v2
+
+jobs:
+  windows:
+    name: Build Windows 11 x64 package
+    runs-on: windows-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: repo
+          fetch-tags: false # see the header note on the SDK version check
+
+      - name: Set up MSVC environment (clang locates the MSVC CRT through it)
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          clang --version
+          cmake --version
+          ninja --version
+
+      - name: Check out ReXGlue SDK (pinned, LF endings)
+        shell: pwsh
+        run: |
+          git -c core.autocrlf=false clone --no-checkout https://github.com/rexglue/rexglue-sdk.git rexglue-sdk
+          git -C rexglue-sdk -c core.autocrlf=false checkout ${{ env.REXSDK_COMMIT }}
+          git -C rexglue-sdk -c core.autocrlf=false submodule update --init --recursive --depth 1
+
+      - name: Apply house SDK patches
+        shell: pwsh
+        working-directory: rexglue-sdk
+        run: |
+          git apply --whitespace=nowarn --ignore-whitespace `
+            --exclude=include/rex/ui/d3d12/d3d12_presenter.h `
+            --exclude=src/ui/d3d12/d3d12_presenter.cpp `
+            ../repo/patches/rexglue-sdk-f5337cd-to-test1.patch
+
+      # ---------------------------------------------------------------- codegen
+      - name: Probe for recompiled sources
+        id: probe
+        shell: pwsh
+        run: |
+          $committed = Test-Path repo/generated/default/sources.cmake
+          $xex       = Test-Path repo/assets/default.xex
+          "committed=$($committed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "xex=$($xex.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          Write-Host "generated/ tree in checkout: $committed; assets/default.xex: $xex"
+
+      # Keyed on everything the tree is derived from, so a changed manifest, a
+      # changed hand-fix script or a new default.xex all invalidate it.
+      - name: Restore generated/ from cache
+        if: steps.probe.outputs.committed != 'true'
+        id: gencache
+        uses: actions/cache/restore@v4
+        with:
+          path: repo/generated
+          key: >-
+            bejeweled-generated-${{ hashFiles(
+              'repo/assets/default.xex',
+              'repo/bejeweled_manifest.toml',
+              'repo/bejeweled_config.toml',
+              'repo/scripts/**') }}
+
+      - name: Generate recompiled sources (codegen)
+        if: steps.probe.outputs.committed != 'true' && steps.gencache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path repo/assets/default.xex)) {
+            throw @"
+          No recompiled sources for this checkout.
+
+          The game exe is compiled from generated/ (recompiled C++), which is
+          produced from YOUR default.xex and is not committed. Pick one:
+            * put your default.xex in assets/ in the checkout this job builds, or
+            * git add -f generated  (ships the tree; see README.md policy), or
+            * re-run a build that restored the generated/ cache.
+          "@
+          }
+          # The game project cannot configure before generated/rexglue.cmake
+          # exists, and that file is a codegen product - so the codegen CLI is
+          # built from a standalone SDK configure first.
+          cmake -S rexglue-sdk -B rexglue-sdk/build-cli -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
+            -DREXGLUE_ENABLE_FIDELITYFX=OFF `
+            "-DCMAKE_C_FLAGS=$env:ARCH_FLAGS" "-DCMAKE_CXX_FLAGS=$env:ARCH_FLAGS"
+          if ($LASTEXITCODE -ne 0) { throw "SDK configure for the codegen CLI failed" }
+          cmake --build rexglue-sdk/build-cli --target rexglue
+          if ($LASTEXITCODE -ne 0) { throw "Building the rexglue codegen CLI failed" }
+          $cli = Get-ChildItem rexglue-sdk -Recurse -Filter rexglue.exe |
+            Select-Object -First 1
+          if (-not $cli) { throw "rexglue.exe not found in the SDK build output" }
+          Push-Location repo
+          & $cli.FullName codegen bejeweled_manifest.toml
+          if ($LASTEXITCODE -ne 0) { Pop-Location; throw "rexglue codegen failed" }
+          Pop-Location
+
+      - name: Apply house codegen fixes (refix)
+        if: steps.probe.outputs.committed != 'true' && steps.gencache.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: repo
+        run: bash scripts/refix.sh
+
+      - name: Save generated/ to cache
+        if: steps.probe.outputs.committed != 'true' && steps.gencache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: repo/generated
+          key: >-
+            bejeweled-generated-${{ hashFiles(
+              'repo/assets/default.xex',
+              'repo/bejeweled_manifest.toml',
+              'repo/bejeweled_config.toml',
+              'repo/scripts/**') }}
+
+      # ------------------------------------------------------------------ game
+      - name: Configure game (win-amd64-release, FidelityFX ON)
+        shell: pwsh
+        working-directory: repo
+        run: >
+          cmake --preset win-amd64-release
+          -DREXSDK_DIR="$env:GITHUB_WORKSPACE/rexglue-sdk"
+          -DREXGLUE_ENABLE_FIDELITYFX=ON
+          -DCMAKE_C_FLAGS=$env:ARCH_FLAGS
+          -DCMAKE_CXX_FLAGS=$env:ARCH_FLAGS
+
+      - name: Build game
+        shell: pwsh
+        working-directory: repo
+        run: cmake --build --preset win-amd64-release
+
+      - name: Build xctd (import-time XCTD decoder)
+        shell: pwsh
+        working-directory: repo
+        run: |
+          cmake -S tools/xctd -B tools/xctd/build-win -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DREXSDK_DIR=$env:GITHUB_WORKSPACE/rexglue-sdk"
+          if ($LASTEXITCODE -ne 0) { throw "xctd configure failed" }
+          cmake --build tools/xctd/build-win
+          if ($LASTEXITCODE -ne 0) { throw "xctd build failed" }
+
+      - name: List build outputs (diagnostic)
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Path repo/out, rexglue-sdk/out -Include *.exe, *.dll `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object { "{0,10}  {1}" -f $_.Length, $_.FullName }
+
+      # --------------------------------------------------------------- launcher
+      - name: Install Qt 6 (MSVC 2022 x64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+          cache: true
+          # Widgets lives in qtbase; no extra modules needed.
+
+      - name: Configure launcher
+        shell: pwsh
+        working-directory: repo/tp-launcher
+        run: >
+          cmake -S . -B out/build/win -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DTP_GAME=bejeweled
+
+      - name: Build launcher
+        shell: pwsh
+        working-directory: repo/tp-launcher
+        run: cmake --build out/build/win
+
+      # -------------------------------------------------------------- packaging
+      - name: Stage package
+        shell: pwsh
+        run: |
+          # Build-dir paths are relative to -RepoRoot; -OutDir is relative to
+          # the current directory (the workspace root).
+          pwsh -NoProfile -File repo/windows/stage-package.ps1 `
+            -RepoRoot "${{ github.workspace }}/repo" `
+            -SdkRoot "${{ github.workspace }}/rexglue-sdk" `
+            -GameBuildDir "out/build/win-amd64-release" `
+            -XctdExe "tools/xctd/build-win/xctd.exe" `
+            -OutDir "dist-windows"
+          if ($LASTEXITCODE -ne 0) { throw "package staging failed" }
+
+      - name: Show package contents
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path dist-windows) {
+            Get-ChildItem dist-windows -Recurse -File |
+              ForEach-Object { "{0,10}  {1}" -f $_.Length, $_.FullName.Substring((Get-Location).Path.Length + 1) }
+          }
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReJeweled-windows-x64
+          path: dist-windows/
+          if-no-files-found: error

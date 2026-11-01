@@ -9,11 +9,17 @@ existing XFileXctdCompressionInformation query report "not compressed".
 
 ## Build
 
-    SDK=/path/to/rexglue-sdk   # patched and built, see ../../patches
-    clang-20 -O1 -c lzxd_xmem.c -I$SDK/thirdparty/libmspack/cabextract/mspack \
-        -DREX_PLATFORM_LINUX=1 -fPIC -w -o lzxd_xmem.o
-    g++ -O1 xctd.cpp $SDK/out/build/src/system/CMakeFiles/rexruntime.dir/lzx.cpp.o \
-        lzxd_xmem.o -I$SDK/include -o xctd
+It is a standalone CMake project: no SDK build is needed, only the
+libmspack headers from the SDK source tree (thirdparty/libmspack is a
+submodule - run `git submodule update --init --recursive` once).
+
+    cmake -S tools/xctd -B tools/xctd/build -DREXSDK_DIR=/path/to/rexglue-sdk
+    cmake --build tools/xctd/build
+
+That is the whole build on Linux and on Windows (MSVC or clang). It used
+to compile against the SDK's `lzx.cpp` object out of a built runtime tree,
+which pinned the tool to one host platform; xctd.cpp now calls libmspack's
+decoder itself, so the same source builds anywhere.
 
 lzxd_xmem.c is a copy of the SDKs mspack lzxd.c with one change: a global
 `int lzxd_xmem_no_uncompressed_realign` that, when set, skips the CAB
@@ -34,19 +40,18 @@ flag set on failure.
   93/94/95 are stored.
 - Sizes verified byte-exact on all four game files (2026-10-04).
 
-## Packaged build (2026-10-12)
+## Packaged builds
 
-The AppImage ships `xctd` in usr/bin; the launcher's import step runs it on
-every file with the XCTD magic (src/xctdprep.cpp). Build used for the
-package (libstdc++/libgcc static so the binary has no C++ runtime deps; a
-fully static link fails because the SDK's lzx.cpp.o is PIC):
-
-    B=project/out/build/linux-amd64-release
-    clang-20 -O2 -c lzxd_xmem.c -I$SDK/thirdparty/libmspack/cabextract/mspack \
-        -DREX_PLATFORM_LINUX=1 -fPIC -w -o build/lzxd_xmem.o
-    clang++-20 -O2 -std=c++20 -static-libstdc++ -static-libgcc xctd.cpp \
-        $B/rexglue-sdk/src/system/CMakeFiles/rexruntime.dir/lzx.cpp.o \
-        build/lzxd_xmem.o -I$SDK/include -o build/xctd
+The AppImage ships `xctd` in usr/bin and the Windows package ships
+`xctd.exe` beside the launcher; the launcher's import step runs it on every
+file with the XCTD magic (src/xctdprep.cpp). The CMake build links
+libstdc++/libgcc statically on Linux and uses the static CRT on MSVC, so
+the tool has no C++ runtime dependency of its own.
 
 Verified: decoding the stock files reproduces the run/gamedata plaintext
-byte-exact for all four (blitz.pak, blitzgfx.pak, blitztitle.pak, blitz.xpr).
+byte-exact for all four (blitz.pak, blitzgfx.pak, blitztitle.pak, blitz.xpr),
+by the shipped Linux build. After the libmspack-direct rewrite (2026-10-31)
+the decoder paths that can be exercised without an encoded sample - zoned
+stored segments, the raw layout, and the reject paths - were diffed against
+the shipped binary and are byte-identical, including the MinGW-built Windows
+exe run under Wine.

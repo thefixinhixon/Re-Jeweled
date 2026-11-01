@@ -1,6 +1,6 @@
 # Credits & Attribution
 
-Re-Jeweled (Linux port) stands on a tall stack of other people's work.
+Re-Jeweled (Linux and Windows port) stands on a tall stack of other people's work.
 This file credits every project, library and tool the port uses, and
 the license each one is under. License texts live in `licenses/`.
 This project's own code is BSD 3-Clause (see `LICENSE`).
@@ -33,5 +33,6 @@ This project's own code is BSD 3-Clause (see `LICENSE`).
   decoding in the bundled `xctd` tool, which prepares the game's
   compressed content files on import. `xctd` links a modified copy of
   libmspack's `lzxd.c` (XMemCompress alignment variant); its complete
-  source ships in `usr/share/rejeweled/xctd-src/` inside the AppImage.
+  source ships in the AppImage (`usr/share/rejeweled/xctd-src/`) and in
+  the Windows package (`xctd-src/`).
 - **linuxdeploy / appimagetool** — AppImage packaging.

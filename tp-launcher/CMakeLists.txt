@@ -23,7 +23,7 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
-add_executable(${TP_TARGET}
+set(TP_SOURCES
     ${TP_QRC}
     src/main.cpp
     src/mainwindow.cpp
@@ -34,6 +34,15 @@ add_executable(${TP_TARGET}
     src/stfs/stfspackage.cpp
     src/xctdprep.cpp
 )
+
+# Windows: GUI subsystem, so launching the launcher does not open a console
+# window behind it. Qt6::EntryPoint supplies the WinMain that calls main().
+if(WIN32)
+    add_executable(${TP_TARGET} WIN32 ${TP_SOURCES})
+    target_link_libraries(${TP_TARGET} PRIVATE Qt6::EntryPoint)
+else()
+    add_executable(${TP_TARGET} ${TP_SOURCES})
+endif()
 target_compile_definitions(${TP_TARGET} PRIVATE ${TP_GAME_DEFINE})
 # Games on the current house runtime (Oct 2026 SDK): its audio has gain and
 # force-stereo but no highpass / front-only / XMA-worker cvars.
@@ -43,6 +52,10 @@ endif()
 
 target_include_directories(${TP_TARGET} PRIVATE src)
 target_link_libraries(${TP_TARGET} PRIVATE Qt6::Widgets)
+
+# Windows needs no extra runtime files: windeployqt collects the Qt DLLs and
+# the platform plugin next to the exe (see .github/workflows/windows.yml and
+# WINDOWS.md). The game program set itself is resolved by platform.cpp.
 
 # src/stfs/ (XBLA/STFS package import) is built into the launcher -
 # see the sources above and the stfs_test harness below.

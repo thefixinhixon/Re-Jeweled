@@ -28,7 +28,10 @@ else()
     add_executable(bejeweled ${BEJEWELED_SOURCES})
 endif()
 
-rexglue_setup_target(bejeweled)
+# GPU_PLUGINS stages the Xenos plugin next to the exe (the runtime loads it by
+# name from beside the executable), so the program set is complete in one
+# folder on every platform: exe + runtime + plugin.
+rexglue_setup_target(bejeweled GPU_PLUGINS xenos)
 
 # imgui headers ship inside the SDK tree but aren't added to the include
 # path by rexglue_setup_target; add them explicitly (same as condemned2).

@@ -26,12 +26,19 @@ bool isXctd(const QString &path)
             quint32(b[3])) == kXctdMagic;
 }
 
-// The decoder ships next to the launcher (AppImage usr/bin); a system
-// install on PATH is the fallback for source builds.
+// The decoder ships next to the launcher (AppImage usr/bin, Windows package
+// folder); a system install on PATH is the fallback for source builds.
+// Windows binaries carry the .exe suffix; QFileInfo::isExecutable() knows a
+// .exe is executable there and a bare name is not.
 QString findXctd()
 {
+#if defined(Q_OS_WIN)
+    const QString besideName = QStringLiteral("xctd.exe");
+#else
+    const QString besideName = QStringLiteral("xctd");
+#endif
     const QString beside =
-        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("xctd"));
+        QDir(QCoreApplication::applicationDirPath()).filePath(besideName);
     if (QFileInfo(beside).isExecutable())
         return beside;
     return QStandardPaths::findExecutable(QStringLiteral("xctd"));

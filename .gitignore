@@ -25,6 +25,11 @@ appimage/rejeweled.png
 
 # --- Release files (upload as GitHub release assets, not commits) ---
 release/
+dist-windows/
+
+# --- Windows builds ---
+tools/xctd/build-win/
+tp-launcher/out/
 
 # --- Runtime leftovers ---
 logs/

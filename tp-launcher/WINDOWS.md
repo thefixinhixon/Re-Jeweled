@@ -1,4 +1,4 @@
-# TP House Launcher — Windows port plan (Phase 2)
+# TP House Launcher — Windows port (Phase 2)
 
 Phase 1 (done) moved every OS-specific behavior of the launcher behind
 `src/platform.h` / `src/platform.cpp`:
@@ -10,10 +10,14 @@ Phase 1 (done) moved every OS-specific behavior of the launcher behind
   pagefile mapping owned by the game process, destroyed by the kernel
   at exit; it cannot leak like a `/dev/shm` tmpfs file)
 
-The Windows branches are written in pure Qt behind `#ifdef Q_OS_WIN`
-but have never been compiled — there is no Windows kit on the dev
-machine. Linux behavior is unchanged (verified: assembled launch
-command lines byte-identical pre/post refactor for both games).
+The Windows branches are written in pure Qt behind `#ifdef Q_OS_WIN`.
+Phase 2 (2026-10-31) made them build: `.github/workflows/windows.yml`
+compiles this launcher with the MSVC Qt kit, as a GUI-subsystem binary
+(`WIN32` + `Qt6::EntryPoint`, no console window), and packages it with
+`windeployqt`. Runtime behavior on Windows has not been play-tested yet —
+see `../docs/windows.md` for the list. Linux behavior is unchanged
+(the Windows code paths are all compile-time, and the Linux program set
+is untouched).
 
 ## Prerequisites
 
@@ -34,9 +38,11 @@ cmake -S . -B build-win-splosion -DTP_GAME=splosionman
 cmake --build build-win-splosion --config Release
 ```
 
-Produces `TPMawLauncher.exe` / `TPSplosionmanLauncher.exe`. The
-QSettings ini scheme carries over unchanged (IniFormat, org
-"HouseRecomp", per-game app name → `%APPDATA%`-side user scope).
+Produces `TPMawLauncher.exe` / `TPSplosionmanLauncher.exe` (this repo:
+`-DTP_GAME=bejeweled` → `ReJeweledLauncher.exe`). The QSettings ini scheme
+carries over unchanged (IniFormat, org "HouseRecomp", per-game app name
+→ `%APPDATA%`-side user scope). Run `windeployqt --compiler-runtime` on
+the exe before moving it anywhere — Windows/stage-package.ps1 does that.
 
 ## Game-side build
 
@@ -53,44 +59,32 @@ configure for Windows with MSVC the same way they do for Linux:
   for the `present_fsr` symbols (`FLAGS_present_fsr_quality_mode`)
   before packaging anything, the same strings audit used on Linux
   (plus the PipeWire audit's Windows equivalent: check the runtime's
-  audio backend imports are the expected Windows ones).
+  audio backend imports are the expected Windows ones).## platform.cpp status
 
-## TODO confirmations in platform.cpp (do these first)
+1. DLL names: **confirmed** against the house Windows SDK build
+   (SplosionManRecomp run #8, 2026-10-03) — `rexruntime.dll` and
+   `rexgpu-xenos.dll`, no `lib` prefix. `programSetFiles()` carries them.
+2. Exe-set layout: the SDK's POST_BUILD step stages the runtime DLLs, the
+   GPU plugin (via `GPU_PLUGINS`) and the FidelityFX DLLs beside the exe,
+   so `resolveExecutableSet`'s "one folder" rule holds unchanged.
+3. `vacuumGuestMemory()` stays a no-op on Windows: the guest-memory
+   backing is assumed to be a process-owned mapping. If a real Windows
+   run shows leaked files anywhere, that is the one spot to revisit.
 
-`platform::programSetFiles()` Windows branch currently returns
-`{<exeName>.exe, librexruntime.dll, librexgpu-xenos.dll}` — the DLL
-names are **guesses** carried over from the Linux `.so` names. Against
-the first real Windows SDK build output:
+Two Windows-only differences are handled outside platform.cpp:
+`gameprofile.h` drops the Linux `SDL_AUDIO_DRIVER=pulseaudio` override
+(empty environment on Windows), and `xctdprep.cpp` looks for `xctd.exe`.
 
-1. Confirm the actual runtime / GPU-plugin DLL file names and the game
-   exe name.
-2. Fix that one list in `platform.cpp` (every consumer — exe-set
-   resolution, error text — goes through it).
-3. Confirm the exe-set layout the SDK produces (exe + DLLs in one
-   folder is assumed by `resolveExecutableSet`, same as Linux).
+## GitHub Actions (implemented)
 
-Also confirm the Windows runtime's guest-memory backing really is a
-process-owned mapping (the `vacuumGuestMemory()` no-op rationale); if
-it writes real files somewhere, that's the one other platform.cpp
-spot to revisit.
-
-## GitHub Actions sketch (windows-latest)
-
-One workflow, matrix over the two games:
-
-1. `windows-latest` runner (MSVC preinstalled).
-2. Install Qt: `jurplel/install-qt-action` (arch `win64_msvc2022_64`,
-   modules: qtbase only — Widgets is in qtbase).
-3. Game build: configure the game repo with the SDK,
-   `-DREXGLUE_ENABLE_FIDELITYFX=ON`, Release; collect exe + runtime
-   DLLs; run the strings audit for `present_fsr`.
-4. Launcher build: configure this project with `-DTP_GAME=<game>`,
-   Release; `windeployqt` the launcher exe.
-5. Artifact = **folder ZIP**: launcher exe + its Qt runtime files +
-   game exe + game runtime DLLs side by side (the layout
-   `resolveExecutableSet` rule (2) expects — program set in the
-   launcher's own folder), plus a README. **No game data** — users
-   import their own XBLA package on first run, same as Linux.
+`../.github/workflows/windows.yml` builds the whole Windows package in
+one job: pinned SDK + house patches, game (clang`, FidelityFX ON),
+`xctd`, launcher (Qt 6.8 MSVC, `-DTP_GAME=bejeweled`), `windeployqt`,
+and `../windows/stage-package.ps1` assembling and asserting the folder.
+The artifact is the complete folder — launcher plus the program set
+beside it, the layout `resolveExecutableSet` rule (2) expects. **No game
+data**: users import their own XBLA package on first run, same as Linux.
+`../docs/windows.md` has the step-by-step and the open questions.
 
 ## Tester-loop verification model
 

@@ -20,21 +20,96 @@
 #include <cstring>
 #include <vector>
 
-int lzx_decompress(const void* lzx_data, size_t lzx_len, void* dest,
-                   size_t dest_len, uint32_t window_size, void* window_data,
-                   size_t window_data_len);
-namespace rex {
-bool bit_scan_forward(uint32_t v, uint32_t* out) {
-  if (!v) return false;
-  *out = __builtin_ctz(v);
-  return true;
+// LZX decoding goes straight to libmspack's decoder core (lzxd_xmem.c, the
+// SDK's lzxd.c with the XMemCompress pad-byte tweak). The SDK's lzx.cpp
+// wrapper is deliberately not used: it is runtime C++ that has to be linked
+// from an SDK build of the host platform, which made this tool a
+// Linux/clang-only exercise. libmspack's public API needs no runtime at all,
+// so this file builds unchanged on Linux and Windows (MSVC included) with
+// nothing but the libmspack headers.
+#include <system.h>  // mspack.h + macros.h
+#include <lzx.h>
+
+namespace {
+
+// libmspack only sees `struct mspack_file*`; these are the memory-backed
+// files it reads the compressed chunk stream from and writes plaintext to.
+struct MemFile {
+  const uint8_t* read_base;
+  uint8_t* write_base;
+  size_t size;
+  size_t pos;
+};
+
+struct MemSystem {
+  mspack_system sys;  // first member: the callbacks receive this pointer
+};
+
+size_t remainingBytes(const MemFile* f) {
+  return f->pos < f->size ? f->size - f->pos : 0;
 }
-bool bit_scan_forward(uint64_t v, uint32_t* out) {
-  if (!v) return false;
-  *out = __builtin_ctzll(v);
-  return true;
+
+int memRead(mspack_file* file, void* buffer, int bytes) {
+  auto* f = reinterpret_cast<MemFile*>(file);
+  if (bytes <= 0) return 0;
+  size_t n = static_cast<size_t>(bytes);
+  if (n > remainingBytes(f)) n = remainingBytes(f);
+  if (n) std::memcpy(buffer, f->read_base + f->pos, n);
+  f->pos += n;
+  return static_cast<int>(n);
 }
-}  // namespace rex
+
+int memWrite(mspack_file* file, void* buffer, int bytes) {
+  auto* f = reinterpret_cast<MemFile*>(file);
+  if (bytes <= 0) return 0;
+  size_t n = static_cast<size_t>(bytes);
+  if (n > remainingBytes(f)) n = remainingBytes(f);
+  if (n) std::memcpy(f->write_base + f->pos, buffer, n);
+  f->pos += n;
+  return static_cast<int>(n);
+}
+
+void* memAlloc(mspack_system*, size_t bytes) {
+  return std::calloc(bytes ? bytes : 1, 1);
+}
+
+void memFree(void* ptr) { std::free(ptr); }
+
+void memCopy(void* src, void* dest, size_t bytes) {
+  std::memcpy(dest, src, bytes);
+}
+
+// One independent LZX stream: in -> out, window_size as a byte count (the
+// format's window bits + 15). Same contract as the SDK's lzx_decompress()
+// for the no-reference-window case this tool uses: 0 = success.
+int lzxDecode(const void* in, size_t in_len, void* out, size_t out_len,
+              uint32_t window_size) {
+  if (!window_size || (window_size & (window_size - 1))) return 1;
+  int window_bits = 0;
+  for (uint32_t w = window_size; w > 1; w >>= 1) window_bits++;
+
+  MemSystem mem{};
+  mem.sys.read = memRead;
+  mem.sys.write = memWrite;
+  mem.sys.alloc = memAlloc;
+  mem.sys.free = memFree;
+  mem.sys.copy = memCopy;
+
+  MemFile src{static_cast<const uint8_t*>(in), nullptr, in_len, 0};
+  MemFile dst{nullptr, static_cast<uint8_t*>(out), out_len, 0};
+
+  lzxd_stream* lzxd =
+      lzxd_init(&mem.sys, reinterpret_cast<mspack_file*>(&src),
+                reinterpret_cast<mspack_file*>(&dst), window_bits,
+                0 /* reset_interval: none */, 0x8000 /* input buffer */,
+                static_cast<off_t>(out_len), 0 /* is_delta */);
+  if (!lzxd) return 1;
+  const int rc = lzxd_decompress(lzxd, static_cast<off_t>(out_len));
+  lzxd_free(lzxd);
+  return rc;
+}
+
+}  // namespace
 
 static uint32_t rd32(const uint8_t* b) {
   return (uint32_t(b[0]) << 24) | (uint32_t(b[1]) << 16) | (uint32_t(b[2]) << 8) |
@@ -184,15 +259,13 @@ int main(int argc, char** argv) {
     }
     ci += need;
     out.assign((size_t)sizes[k], 0);
-    int rc = lzx_decompress(in.data(), in.size(), out.data(), out.size(),
-                            window, nullptr, 0);
+    int rc = lzxDecode(in.data(), in.size(), out.data(), out.size(), window);
     if (rc) {
       // XMemCompress dialect: no CAB realign pad after odd uncompressed
       // blocks. Segments are independent streams; retry this one flipped.
       extern int lzxd_xmem_no_uncompressed_realign;
       lzxd_xmem_no_uncompressed_realign = 1;
-      rc = lzx_decompress(in.data(), in.size(), out.data(), out.size(),
-                          window, nullptr, 0);
+      rc = lzxDecode(in.data(), in.size(), out.data(), out.size(), window);
       lzxd_xmem_no_uncompressed_realign = 0;
     }
     if (rc) {

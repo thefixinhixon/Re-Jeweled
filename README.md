@@ -1,7 +1,7 @@
 # Re-Jeweled
 
-A native Linux port of **Bejeweled Blitz Live** (Xbox Live Arcade, 2011,
-Torpex Games / PopCap Games), built with the
+A native port of **Bejeweled Blitz Live** (Xbox Live Arcade, 2011,
+Torpex Games / PopCap Games) for Linux and Windows, built with the
 [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) static recompiler.
 It belongs to the same family as
 ['Splosion Man](https://github.com/thefixinhixon/SplosionManRecomp) and
@@ -11,6 +11,12 @@ It belongs to the same family as
 Classic one-player rounds and results all work, with full graphics,
 PipeWire audio and controller input. It runs at a locked 60 fps using
 about 0.3 to 0.9 of a CPU core.
+
+**Windows (new, build 1): builds in CI, not yet play-tested.**
+`.github/workflows/windows.yml` produces a Windows 10/11 x64 folder
+package (launcher + matched program set + `xctd`, no game data); Windows
+runs the runtime's D3D12 backend. See `docs/windows.md` for how it is
+built and what is still unproven.
 
 > **No game data is included in this repository or its releases.**
 > Supply your own legally obtained copy of the game, title ID **58410A57**.
@@ -36,6 +42,29 @@ about 0.3 to 0.9 of a CPU core.
 
 The game binary needs **glibc 2.43 or newer**, a Vulkan GPU and a
 controller. See `appimage/README.txt` for the full release notes.
+
+## Play (Windows package)
+
+1. Download the `ReJeweled-windows-x64` artifact from the latest
+   **Windows build** workflow run and unzip it into a writable folder.
+2. Run `ReJeweledLauncher.exe`, then **Import game data** exactly as on
+   Linux, and click **PLAY**.
+
+Windows 10/11 x64, a D3D12-capable GPU and a controller. `README.txt`
+inside the package is the user-facing version of this section.
+
+## Build with GitHub Actions
+
+`.github/workflows/windows.yml` runs on `workflow_dispatch`, pushes to
+`main` and pull requests, and needs no Windows machine. It pins the SDK
+commit, applies the house patches, builds the game/launcher/`xctd` and
+uploads the packaged folder.
+
+`generated/` is not committed, so the job needs the recompiled sources
+from somewhere: a committed `generated/` tree, the Actions cache from an
+earlier run, or `assets/default.xex` in the checkout (then it runs
+codegen itself and caches the result). With none of the three it stops
+with an explanation. `docs/windows.md` has the details.
 
 ## What this port fixed
 
@@ -64,10 +93,13 @@ controller. See `appimage/README.txt` for the full release notes.
 | `src/` | App entry, import stubs, perf hook |
 | `scripts/` | Post-codegen fixes, including the VFS archive-root fallback and the movie-preload skip (`fix-handedits.py`). Run `scripts/refix.sh` after every codegen. |
 | `patches/` | ReXGlue SDK patches this port needs (see `patches/README.md`) |
-| `tools/xctd/` | XCTD (XCompress LZX) decoder used on import |
+| `tools/xctd/` | XCTD (XCompress LZX) decoder used on import; standalone CMake project, builds on Linux and Windows |
 | `tools/framegrab/` | Debug helper: dump a guest texture from the memory arena |
 | `tp-launcher/` | Re-Jeweled Launcher (Qt 6), the Bejeweled profile of the house launcher |
 | `appimage/` | AppImage packaging script, release README, licenses |
+| `windows/` | Windows package staging script and the README that ships in the package |
+| `.github/workflows/` | Windows CI build |
+| `docs/windows.md` | Windows port notes: what CI does, what is verified, what is not |
 | `assets/`, `generated/` | Your `default.xex` and codegen output. Both are gitignored and never committed. |
 
 ## Build from source (Linux)
@@ -102,7 +134,11 @@ Python 3.
    cmake -S tp-launcher -B tp-launcher/build -DCMAKE_BUILD_TYPE=Release
    cmake --build tp-launcher/build
    ```
-6. **xctd:** see `tools/xctd/README.md`.
+6. **xctd:** standalone CMake project (see `tools/xctd/README.md`):
+   ```sh
+   cmake -S tools/xctd -B tools/xctd/build -DREXSDK_DIR=/path/to/rexglue-sdk
+   cmake --build tools/xctd/build
+   ```
 7. **Run without the launcher.** Put `bejeweled` and the two libraries
    in one folder, then run:
    ```sh
