@@ -36,10 +36,11 @@ set(TP_SOURCES
 )
 
 # Windows: GUI subsystem, so launching the launcher does not open a console
-# window behind it. Qt6::EntryPoint supplies the WinMain that calls main().
+# window behind it. src/winentry.cpp supplies the WinMain that calls main():
+# Qt 6.8 exports its entry-point library only as the internal
+# Qt6::EntryPointPrivate, so we do not depend on it.
 if(WIN32)
-    add_executable(${TP_TARGET} WIN32 ${TP_SOURCES})
-    target_link_libraries(${TP_TARGET} PRIVATE Qt6::EntryPoint)
+    add_executable(${TP_TARGET} WIN32 ${TP_SOURCES} src/winentry.cpp)
 else()
     add_executable(${TP_TARGET} ${TP_SOURCES})
 endif()
