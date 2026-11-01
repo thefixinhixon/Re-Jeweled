@@ -74,6 +74,42 @@ Write-Host "windeployqt: $windeployqtExe"
     --no-system-d3d-compiler --dir $out (Join-Path $out 'ReJeweledLauncher.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed (exit $LASTEXITCODE)" }
 
+# --compiler-runtime does not reliably find the VC redist on the CI image
+# (windows-latest with VS 18 left vcruntime140/msvcp140 out), so place the CRT
+# DLLs here from the redist folder the MSVC environment points at. Conditional,
+# so on a machine where windeployqt already did it nothing happens.
+if (-not (Test-Path (Join-Path $out 'vcruntime140.dll'))) {
+    $crtDir = $null
+    if ($env:VCToolsRedistDir -and (Test-Path $env:VCToolsRedistDir)) {
+        $crtDir = Get-ChildItem -Path $env:VCToolsRedistDir -Recurse -Directory `
+            -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -like '*x64*' } |
+            Sort-Object -Property FullName -Descending |
+            Select-Object -First 1
+    }
+    if (-not $crtDir -and $env:ProgramFiles) {
+        $vsRoot = Join-Path $env:ProgramFiles 'Microsoft Visual Studio'
+        if (Test-Path $vsRoot) {
+            $crtDir = Get-ChildItem -Path $vsRoot -Recurse -Directory `
+                -Filter 'Microsoft.VC*.CRT' -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -like '*x64*' } |
+                Sort-Object -Property FullName -Descending |
+                Select-Object -First 1
+        }
+    }
+    if (-not $crtDir) {
+        throw ("VC redist DLLs not found: vcruntime140.dll/msvcp140.dll are missing " +
+               "and no Microsoft.VC*.CRT x64 folder was found under VCToolsRedistDir " +
+               "or the Microsoft Visual Studio install.")
+    }
+    foreach ($name in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll',
+                        'msvcp140_1.dll', 'msvcp140_2.dll', 'concrt140.dll')) {
+        $src = Join-Path $crtDir.FullName $name
+        if (Test-Path $src) { Copy-Item $src $out }
+    }
+    Write-Host "VC runtime DLLs copied from $($crtDir.FullName)"
+}
+
 # --------------------------------------------------------- game program set
 # exe + every DLL it was built against, taken whole from one build folder.
 Copy-Item $gameExe $out
