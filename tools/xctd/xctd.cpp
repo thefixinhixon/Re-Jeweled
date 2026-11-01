@@ -30,6 +30,11 @@
 #include <system.h>  // mspack.h + macros.h
 #include <lzx.h>
 
+// lzxd_xmem.c is compiled as C, so the flag it defines carries C linkage. It
+// has to be declared here, at namespace scope: a block-scope `extern int`
+// gives it C++ linkage and the link fails on the mangled name (MSVC: LNK2019).
+extern "C" int lzxd_xmem_no_uncompressed_realign;
+
 namespace {
 
 // libmspack only sees `struct mspack_file*`; these are the memory-backed
@@ -263,7 +268,6 @@ int main(int argc, char** argv) {
     if (rc) {
       // XMemCompress dialect: no CAB realign pad after odd uncompressed
       // blocks. Segments are independent streams; retry this one flipped.
-      extern int lzxd_xmem_no_uncompressed_realign;
       lzxd_xmem_no_uncompressed_realign = 1;
       rc = lzxDecode(in.data(), in.size(), out.data(), out.size(), window);
       lzxd_xmem_no_uncompressed_realign = 0;
