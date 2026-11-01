@@ -14,10 +14,10 @@
 # Bejeweled Blitz Live (title 58410A57) on first run, exactly as on Linux.
 #
 # The game exe is compiled from the recompiled sources in generated/, which
-# this repo does not commit (they are derived from the game's default.xex and
-# .gitignore keeps them out - see README.md). The "Recompiled sources" steps
-# accept any of:
-#   1. a generated/ tree in the checkout       (git add -f generated),
+# this repo commits so the package can be built without the game's
+# default.xex (the tree holds no game data - only machine-translated C++).
+# The "Recompiled sources" steps accept any of:
+#   1. a generated/ tree in the checkout       (the normal case: committed),
 #   2. the Actions cache from an earlier run   (restored below), or
 #   3. assets/default.xex in the checkout      (codegen runs here, then cached).
 # With none of the three the job stops with an explanation instead of a

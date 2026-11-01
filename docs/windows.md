@@ -29,13 +29,15 @@ unproven. The user-facing instructions ship inside the package
    is half-ported - its base-class half is not in this SDK tree - which
    never shows on Linux (D3D12 sources do not compile there) but breaks the
    Windows build. Windows therefore uses the pristine upstream presenter.
-2. **Recompiled sources** - `generated/` is not committed (it is derived
-   from the game's `default.xex`). The workflow takes it from a committed
-   tree if one exists, else the Actions cache, else runs the codegen CLI.
-   The codegen CLI comes from a standalone SDK configure (the game project
-   cannot configure before `generated/rexglue.cmake` exists), then
-   `bash scripts/refix.sh` re-applies the house fixes and the tree is cached
-   under the `default.xex` hash so only the first run pays for it.
+2. **Recompiled sources** - `generated/` is committed (about 340 MB of C++
+   derived from the game's `default.xex`; it holds no game data), so the
+   probe step finds `generated/default/sources.cmake` and the build goes
+   straight to configuring. The cache and codegen paths remain as fallbacks
+   for checkouts without the tree: the Actions cache first, else the codegen
+   CLI from a standalone SDK configure (the game project cannot configure
+   before `generated/rexglue.cmake` exists) plus `bash scripts/refix.sh`.
+   Refresh the committed tree with `bash scripts/refix.sh` after a fresh
+   codegen.
 3. **Game** - `cmake --preset win-amd64-release` (clang/clang++ + Ninja, not
    MSVC: the SDK passes GCC-style flags), `-DREXGLUE_ENABLE_FIDELITYFX=ON`,
    `-march=x86-64-v2`. `rexglue_setup_target(bejeweled GPU_PLUGINS xenos)`

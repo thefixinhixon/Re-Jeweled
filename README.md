@@ -60,11 +60,11 @@ inside the package is the user-facing version of this section.
 commit, applies the house patches, builds the game/launcher/`xctd` and
 uploads the packaged folder.
 
-`generated/` is not committed, so the job needs the recompiled sources
-from somewhere: a committed `generated/` tree, the Actions cache from an
-earlier run, or `assets/default.xex` in the checkout (then it runs
-codegen itself and caches the result). With none of the three it stops
-with an explanation. `docs/windows.md` has the details.
+`generated/` (the recompiled C++ sources) is committed, so the job needs
+nothing from you and no `default.xex` is involved. If the tree is ever
+absent, the job falls back to the Actions cache from an earlier run, then
+to running codegen on `assets/default.xex`; with none of the three it
+stops with an explanation. `docs/windows.md` has the details.
 
 ## What this port fixed
 
@@ -100,7 +100,8 @@ with an explanation. `docs/windows.md` has the details.
 | `windows/` | Windows package staging script and the README that ships in the package |
 | `.github/workflows/` | Windows CI build |
 | `docs/windows.md` | Windows port notes: what CI does, what is verified, what is not |
-| `assets/`, `generated/` | Your `default.xex` and codegen output. Both are gitignored and never committed. |
+| `assets/` | Your `default.xex`. Gitignored, never committed. |
+| `generated/` | Codegen output (recompiled C++), committed so CI can build the Windows package without the XEX. Run `scripts/refix.sh` after a fresh codegen. |
 
 ## Build from source (Linux)
 
